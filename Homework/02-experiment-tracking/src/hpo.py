@@ -3,11 +3,11 @@ import pickle
 import click
 import mlflow
 
-import xgboost as xgb
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
-
-from sklearn.metrics import mean_squared_error
 
 def load_pickle(filename):
     with open(filename, "rb") as f_in:
@@ -22,42 +22,37 @@ def load_pickle(filename):
 )
 
 def run_optimization(data_path: str):
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("random-forest-hyperopt")
+    #mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("rfr-hyperopt")
 
     X_train, y_train = load_pickle(os.path.join(data_path, "train.pkl"))
     X_val, y_val = load_pickle(os.path.join(data_path, "val.pkl"))
-
-    train = xgb.DMatrix(X_train, label=y_train)
-    valid = xgb.DMatrix(X_val, label=y_val)
 
     def objective(params):
     
         with mlflow.start_run():
             mlflow.set_tag("developer", "agustin")
-            mlflow.set_tag("model", "xgboost")
-            mlflow.log_params(params)
-            booster = xgb.train(
-                params=params,
-                dtrain=train,
-                num_boost_round=1000,
-                evals=[(valid, "validaton")],
-                early_stopping_rounds=50
-            )
-            y_pred = booster.predict(valid)
+            mlflow.set_tag("model", "rf-regressor")
+            rf = RandomForestRegressor(**params)
+            rf.fit(X_train, y_train)
+            y_pred = rf.predict(X_val)
             rmse = mean_squared_error(y_val, y_pred, squared=False)
             mlflow.log_metric("rmse", rmse)
+            mlflow.log_param("n_estimators",params['n_estimators'])
+            mlflow.log_param("max_depth",params['max_depth'])
+            mlflow.log_param("min_samples_split",params['min_samples_split'])
+            mlflow.log_param("min_samples_leaf",params['min_samples_leaf'])
+            mlflow.log_artifacts("./artifacts")
 
         return {"loss": rmse, "status": STATUS_OK}
-
+    
     search_space = {
-        "max_depth": scope.int(hp.quniform("max_depth", 4, 100,1)),
-        "learning_rate": hp.loguniform("learning_rate", -3, 0),
-        "reg_alpha": hp.loguniform("reg_alpha", -5, -1),
-        "reg_lambda": hp.loguniform("reg_lambda", -6, -1),
-        "min_child_weight": hp.loguniform("min_child_weight", -1, 3),
-        "objectve": "reg:linear",
-        "seed": 42,
+        'n_estimators': scope.int(hp.quniform("n_estimators", 1, 300,)),
+        'max_depth': scope.int(hp.quniform("max_depth", 3, 20,1)),
+        'min_samples_split': scope.int(hp.quniform("min_samples_split", 2, 20,1)),
+        'min_samples_leaf': scope.int(hp.quniform("min_samples_leaf", 2, 20,1)), 
+        #'random_state': 42
     }
 
     best_result = fmin(
